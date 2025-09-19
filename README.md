@@ -77,7 +77,8 @@ pip install netCDF4
 # Optional dependencies for visualization
 pip install pandas matplotlib seaborn
 ```
-
+# Install dependency (on Pawsey in your environment)
+pip install pytorch-3dunet
 ### Setup
 
 ```bash
@@ -133,7 +134,7 @@ python feilian_main.py 42 --force-cpu --batch-size 1    # CPU debugging
 | Option | Description | Default | Memory Impact |
 |--------|-------------|---------|---------------|
 | `--data-path` | Path to training data directory | `raw_data/wind3D/idealized/` | - |
-| `--num-epochs` | Number of training epochs | `1000` | - |
+| `--num-epochs` | Number of training epochs | `1000` | - | increase to 2000 for testing the possible outcome
 | `--batch-size` | Training batch size | `4` | **High** - reduce to 2 or 1 for memory constraints |
 | `--learning-rate` | Adam optimizer learning rate | `1e-3` | - |
 | `--chan-multi` | Network channel multiplier | `20` | **High** - reduce to 16, 8 for smaller model |
@@ -154,6 +155,8 @@ python feilian_main.py 42 --force-cpu --batch-size 1    # CPU debugging
 | **NVIDIA 8GB+ VRAM** | `--batch-size 4 --mixed-precision` | ✅ Fast, ~1min/epoch |
 | **Memory Constrained** | `--batch-size 1 --chan-multi 16 --max-level 5` | ✅ Slower but stable |
 | **Debugging/Testing** | `--batch-size 1 --chan-multi 8 --max-level 3` | ✅ Minimal footprint |
+| **Pawsey HPC (GPU)** | `--batch-size 32 --mixed-precision --device cuda` | ✅ Ultra-fast, <30s/epoch |
+| **Pawsey HPC (Multi-GPU)** | `--batch-size 64 --mixed-precision --distributed` | ✅ Distributed training |
 
 ### Legacy Training
 
@@ -330,3 +333,52 @@ train_network_model_with_adam(
 
 - **Wind Speed**: 2D arrays of predicted wind speeds at pedestrian level
 - **Metrics**: Comprehensive evaluation including MAE, RMSE, R²
+
+## Running on Pawsey (HPC)
+
+- Use scratch storage for datasets: `/scratch/pawsey0928/sxu/wind3D/idealized/` (adjust as per your project/allocation).
+- Submit jobs via SLURM; load site modules or activate a Conda env with PyTorch.
+- Start with single-GPU; move to multi-GPU only if the code supports distributed training.
+
+### Single-GPU job (SLURM)
+
+Create a job script (see scripts/pawsey_job.sbatch) and submit:
+```bash
+sbatch scripts/pawsey_job.sbatch
+```
+#!/bin/bash
+#SBATCH --job-name=feilian
+#SBATCH --partition=gpu            # adjust per Pawsey queue
+#SBATCH --gpus=1                   # number of GPUs, it could be from 1-8
+#SBATCH --cpus-per-task=8
+#SBATCH --time=04:00:00
+#SBATCH --output=logs/%x-%j.out
+
+module purge
+# TODO: load site modules or activate conda
+# module load python/<version> cuda/<version>    # or ROCm if applicable
+# source ~/miniconda3/etc/profile.d/conda.sh
+# conda activate feilian
+
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+mkdir -p logs
+
+srun python feilian_main.py 42 \
+  --data-path /scratch/$USER/wind3D/idealized/ \
+  --batch-size 32 \
+  --mixed-precision \
+  --device auto \
+  --verbose
+
+
+### Multi-GPU (optional)
+
+If your code supports DistributedDataParallel, launch with torchrun:
+```bash
+# Request multiple GPUs in your SBATCH header (e.g., --gpus=4), then:
+torchrun --standalone --nproc_per_node=$SLURM_GPUS_PER_NODE \
+  feilian_main.py 42 \
+  --data-path /scratch/$USER/wind3D/idealized/ \
+  --batch-size 64 --mixed-precision --device auto
+```
+Note: If DDP isn’t implemented, keep using single-GPU and remove/adjust the “Multi-GPU” row in the table.
